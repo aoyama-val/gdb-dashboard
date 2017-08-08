@@ -669,7 +669,7 @@ files."""
                 name = directive[not enabled:]
                 try:
                     # it may actually start from last, but in this way repeated
-                    # modules can be handled transparently and without error
+                    # modules can be handler transparently and without error
                     todo = enumerate(modules[last:], start=last)
                     index = next(i for i, m in todo if name == m.name)
                     modules[index].enabled = enabled
@@ -680,7 +680,7 @@ files."""
                     def find_module(x):
                         return x.name == name
                     first_part = modules[:last]
-                    if len(list(filter(find_module, first_part))) == 0:
+                    if len(filter(find_module, first_part)) == 0:
                         Dashboard.err('Cannot find module "{}"'.format(name))
                     else:
                         Dashboard.err('Module "{}" already set'.format(name))
@@ -811,6 +811,8 @@ class Source(Dashboard.Module):
         for number, line in enumerate(self.source_lines[start:end], start + 1):
             # properly handle UTF-8 source files
             line = to_string(line)
+            break_nums = self.find_breakpoint_locations(self.file_name)
+            is_breakpoint = str(number) in break_nums
             if int(number) == current_line:
                 # the current line has a different style without ANSI
                 if R.ansi:
@@ -823,6 +825,8 @@ class Source(Dashboard.Module):
                 else:
                     # just show a plain text indicator
                     line_format = number_format + '>{}'
+            elif is_breakpoint:
+                line_format = ansi(number_format, self.style_break) + ' {}'
             else:
                 line_format = ansi(number_format, R.style_low) + ' {}'
             out.append(line_format.format(number, line.rstrip('\n')))
@@ -835,8 +839,30 @@ class Source(Dashboard.Module):
                 'default': 5,
                 'type': int,
                 'check': check_ge_zero
+            },
+            'style_break': {
+                'default': '1;32;42'
             }
         }
+
+    def find_breakpoint_locations(self, filename):
+        output = run('info breakpoints')
+        output_lines = output.split('\n')
+
+        basename = os.path.basename(filename)
+
+        breakpoints = []
+
+        for line in output_lines:
+            # find string of type 'main.c:' located in the end of the line
+            filename_and_num_pos = line.find(basename + ':')
+            if filename_and_num_pos != -1:
+                loc = line[filename_and_num_pos:]
+                curr_filename, linenum = loc.split(':')
+
+                breakpoints.append(linenum)
+
+        return breakpoints
 
 class Assembly(Dashboard.Module):
     """Show the disassembled code surrounding the program counter. The
