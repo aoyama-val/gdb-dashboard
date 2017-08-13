@@ -846,13 +846,13 @@ class Source(Dashboard.Module):
                 'check': check_ge_zero
             },
             'tabstop': {
-                'doc': 'Number of spaces that a <Tab> in the source file counts for. Applied ony if expand command is available.',
+                'doc': 'Number of spaces that a <Tab> in the source file counts for. Applied only if expand command is available.',
                 'default': 4,
                 'type': int,
                 'check': check_gt_zero
             },
             'style_break': {
-                'default': '1;32;42'
+                'default': '0;30;43'
             }
         }
 
@@ -865,6 +865,10 @@ class Source(Dashboard.Module):
         breakpoints = []
 
         for line in output_lines:
+            # skip if disabled
+            split = line.split()
+            if len(split) >= 4 and split[3] == 'n':
+                continue
             # find string of type 'main.c:' located in the end of the line
             filename_and_num_pos = line.find(basename + ':')
             if filename_and_num_pos != -1:
