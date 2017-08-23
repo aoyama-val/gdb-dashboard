@@ -191,7 +191,7 @@ def format_address(address):
     return ('0x{{:0{}x}}').format(pointer_size * 2).format(address)
 
 class Highlighter():
-    def __init__(self, filename):
+    def __init__(self, filename, tabsize=4):
         self.active = False
         if not R.ansi:
             return
@@ -202,6 +202,8 @@ class Highlighter():
             formatter_class = pygments.formatters.Terminal256Formatter
             self.formatter = formatter_class(style=R.syntax_highlighting)
             self.lexer = pygments.lexers.get_lexer_for_filename(filename)
+            from pygments.filters import VisibleWhitespaceFilter
+            self.lexer.add_filter(VisibleWhitespaceFilter(tabsize=tabsize, tabs=' '))
             self.active = True
         except ImportError:
             # Pygments not available
@@ -774,7 +776,25 @@ class Source(Dashboard.Module):
         self.highlighted = False
 
     def label(self):
-        return 'Source'
+        width = Dashboard.get_term_width()
+        lab = os.path.basename(self.file_name) + ' : '
+        started = False
+        try:
+            frame = gdb.newest_frame()
+            func_names = []
+            max = 3
+            for i in range(max):
+                if frame is None:
+                    break
+                if frame == gdb.selected_frame():
+                    started = True
+                if started:
+                    func_names.append(frame.name())
+                frame = frame.older()
+            lab += '  '.join(func_names)
+            return lab[:(width-5)]
+        except:
+            return lab
 
     def lines(self, term_width, style_changed):
         # try to fetch the current line (skip if no line information)
@@ -795,15 +815,11 @@ class Source(Dashboard.Module):
             self.file_name = file_name
             self.ts = ts
             try:
-                highlighter = Highlighter(self.file_name)
+                highlighter = Highlighter(self.file_name, tabsize=self.tabsize)
                 self.highlighted = highlighter.active
-                if subprocess.call("which expand", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
-                    source = highlighter.process(os.popen("expand -t %d < %s" % (self.tabstop, self.file_name)).read())
+                with open(self.file_name) as source_file:
+                    source = highlighter.process(source_file.read())
                     self.source_lines = source.split('\n')
-                else:
-                    with open(self.file_name) as source_file:
-                        source = highlighter.process(source_file.read())
-                        self.source_lines = source.split('\n')
             except Exception as e:
                 msg = 'Cannot display "{}" ({})'.format(self.file_name, e)
                 return [ansi(msg, R.style_error)]
@@ -816,14 +832,14 @@ class Source(Dashboard.Module):
         for number, line in enumerate(self.source_lines[start:end], start + 1):
             # properly handle UTF-8 source files
             line = to_string(line)
-            break_nums = self.find_breakpoint_locations(self.file_name)
+            break_nums, enabled = self.find_breakpoint_locations(self.file_name)
             is_breakpoint = str(number) in break_nums
             if int(number) == current_line:
                 # the current line has a different style without ANSI
                 if R.ansi:
                     if self.highlighted:
                         line_format = ansi(number_format,
-                                           R.style_selected_1) + ' {}'
+                                           self.style_current) + ' {}'
                     else:
                         line_format = ansi(number_format + ' {}',
                                            R.style_selected_1)
@@ -831,7 +847,10 @@ class Source(Dashboard.Module):
                     # just show a plain text indicator
                     line_format = number_format + '>{}'
             elif is_breakpoint:
-                line_format = ansi(number_format, self.style_break) + ' {}'
+                if enabled[str(number)]:
+                    line_format = ansi(number_format, self.style_break) + ' {}'
+                else:
+                    line_format = ansi(number_format, self.style_break_disabled) + ' {}'
             else:
                 line_format = ansi(number_format, R.style_low) + ' {}'
             out.append(line_format.format(number, line.rstrip('\n')))
@@ -845,14 +864,20 @@ class Source(Dashboard.Module):
                 'type': int,
                 'check': check_ge_zero
             },
-            'tabstop': {
-                'doc': 'Number of spaces that a <Tab> in the source file counts for. Applied only if expand command is available.',
+            'tabsize': {
+                'doc': 'Number of spaces that a <Tab> in the source file counts for.',
                 'default': 4,
                 'type': int,
                 'check': check_gt_zero
             },
+            'style_current': {
+                'default': '0;31'
+            },
             'style_break': {
                 'default': '0;30;43'
+            },
+            'style_break_disabled': {
+                'default': '0;30;44'
             }
         }
 
@@ -863,12 +888,11 @@ class Source(Dashboard.Module):
         basename = os.path.basename(filename)
 
         breakpoints = []
+        enabled = {}
 
         for line in output_lines:
-            # skip if disabled
-            split = line.split()
-            if len(split) >= 4 and split[3] == 'n':
-                continue
+            line = line.replace("hw watchpoint", "hw_watchpoint")
+            sp = line.split()
             # find string of type 'main.c:' located in the end of the line
             filename_and_num_pos = line.find(basename + ':')
             if filename_and_num_pos != -1:
@@ -876,8 +900,12 @@ class Source(Dashboard.Module):
                 curr_filename, linenum = loc.split(':')
 
                 breakpoints.append(linenum)
+                if len(sp) >= 4 and sp[3] == "y":
+                    enabled[linenum] = True
+                else:
+                    enabled[linenum] = False
 
-        return breakpoints
+        return (breakpoints, enabled)
 
 class Assembly(Dashboard.Module):
     """Show the disassembled code surrounding the program counter. The
